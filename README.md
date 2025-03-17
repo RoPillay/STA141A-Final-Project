@@ -1,1 +1,3 @@
 # STA141A-Final-Project
+
+In this project report, we look at the a dataset from Steinmetz et al. (2019.). This dataset looked at the neural activity of mice based on contrasting visual stimuli through numerous trials and sessions. The mices' decisions would be recorded with either a -1 (Unsuccessful), or a 1 (Successful). This report dives into the data of four mice in particular (Cori, Forssmann, Hench, and Lederberg) through 18 sessions. The main goal of the analysis is to aim to build a predicitve model to accurately predict decision making or the mices' behavior based on observed neural activity and patterns. First, an exploratory data analysis is done to gain insights into the 
