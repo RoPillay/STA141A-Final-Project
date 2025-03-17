@@ -1,0 +1,583 @@
+---
+title: "STA141 Final Project"
+author: "Rohan Pillay"
+date: "2025-03-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE}
+library(jsonlite)
+
+setwd("C:/Users/rohan/Downloads/STA141AProject/sessions")
+rds_files = list.files(pattern = "*.rds")  #only .rds files
+
+for (file in rds_files) {
+  session_data = readRDS(file)
+
+  print(paste("Processing:", file))
+  print(str(session_data))
+
+  if (is.list(session_data)) {
+    for (name in names(session_data)) {
+      element = session_data[[name]]
+      
+      if (is.data.frame(element) || is.matrix(element)) {
+        df = as.data.frame(element)
+        write.csv(df, paste0(sub(".rds", "", file), "_", name, ".csv"), row.names = FALSE)
+        write_json(df, paste0(sub(".rds", "", file), "_", name, ".json"), pretty = TRUE)
+      }
+    }
+  }
+}
+```
+
+```{r, warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(reshape2)
+library(caret)  
+library(randomForest)  
+library(Rtsne)
+setwd("C:/Users/rohan/Downloads/STA141AProject/sessions")
+rds_files <- list.files(pattern = "*.rds")
+all_data <- list()
+
+# Loop through each session file
+for (file in rds_files) {
+  session_data <- readRDS(file)
+  df <- data.frame(
+    trial = 1:length(session_data$contrast_left),
+    contrast_left = session_data$contrast_left,
+    contrast_right = session_data$contrast_right,
+    feedback_type = session_data$feedback_type,
+    mouse_name = session_data$mouse_name,
+    date_exp = session_data$date_exp
+)
+  avg_firing <- sapply(session_data$spks, function(spike_matrix) mean(spike_matrix))
+  df$avg_firing <- avg_firing
+  
+  all_data[[file]] <- df
+}
+combined_data <- bind_rows(all_data, .id = "session")
+
+# Convert categorical variables to factors
+combined_data$feedback_type <- as.factor(combined_data$feedback_type)
+combined_data$mouse_name <- as.factor(combined_data$mouse_name)
+combined_data$session <- as.factor(combined_data$session)
+summary(combined_data)
+```
+
+```{r, warning=FALSE}
+# Exploratory Analysis code
+library(tidyverse)
+library(knitr)
+library(dplyr)
+library(gtools)
+setwd("C:/Users/rohan/Downloads/STA141AProject/sessions")
+
+rds_files <- list.files(pattern = "*.rds")
+
+
+session_summaries <- list()
+
+
+for (file in rds_files) {
+  session_data <- readRDS(file)
+  session_name <- sub(".rds", "", file)
+  
+  num_trials <- length(session_data$contrast_left)
+  num_neurons <- nrow(session_data$spks[[1]])  
+  brain_areas <- unique(session_data$brain_area)
+  num_brain_areas <- length(brain_areas)
+ 
+  contrast_left_dist <- table(session_data$contrast_left)
+  contrast_right_dist <- table(session_data$contrast_right)
+
+  feedback_dist <- table(session_data$feedback_type)
+  avg_firing_rates <- sapply(session_data$spks, function(spike_matrix) mean(spike_matrix))
+  mean_firing_rate <- mean(avg_firing_rates)
+  session_summary <- data.frame(
+    session = session_name,
+    mouse = session_data$mouse_name,
+    num_trials = num_trials,
+    num_neurons = num_neurons,
+    num_brain_areas = num_brain_areas,
+    mean_firing_rate = mean_firing_rate
+  )
+  session_summaries[[session_name]] <- session_summary
+}
+
+summary_df <- bind_rows(session_summaries)
+summary_df <- summary_df %>%
+  mutate(session = factor(session, levels = mixedsort(summary_df$session))) %>%
+  arrange(session)
+# Summary Table
+kable(summary_df)
+write.csv(summary_df, "session_summary.csv", row.names = FALSE)
+
+# Graph for number of trials per session
+ggplot(summary_df, aes(x = session, y = num_trials, fill = mouse)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Sessions", y = "Trials") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Graph for number Neurons per session
+ggplot(summary_df, aes(x = session, y = num_neurons, fill = mouse)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Sessions", y = "Neurons") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Heat map for Number of Neurons Recorded Over Certain Trials
+ggplot(summary_df, aes(x = factor(num_trials), y = mouse, fill = num_neurons)) +
+  geom_tile(color = "white", width = 0.9, height = 0.9) +
+  scale_fill_viridis_c(option = "C") +  
+  theme_minimal() +
+  labs(x = "Trials", y = "Mouse", fill = "Neurons") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+trial_spike_df <- data.frame()
+for (file in rds_files) {
+  session_data <- readRDS(file)
+  session_name <- sub(".rds", "", file)
+  
+  avg_firing_rates <- sapply(session_data$spks, function(spike_matrix) mean(spike_matrix))
+  
+  temp_df <- data.frame(
+    trial = 1:length(avg_firing_rates), 
+    avg_spike_rate = avg_firing_rates,
+    session = session_name,
+    mouse = session_data$mouse_name
+  )
+  
+  trial_spike_df <- bind_rows(trial_spike_df, temp_df)
+}
+
+trial_spike_df <- trial_spike_df %>%
+  filter(trial <= 18)
+# Graph for Mean Spike Rates across Trials
+ggplot(trial_spike_df, aes(x = trial, y = avg_spike_rate, color = session, group = session)) +
+  geom_line(size = 1.2, alpha = 0.8) +  
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(x = "Trial Number", y = "Mean Spike Rate") +
+  scale_color_brewer(palette = "Set2") +  
+  theme(legend.position = "bottom")
+
+# Graph for mean firing rate per session
+ggplot(summary_df, aes(x = session, y = mean_firing_rate, fill = mouse)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Sessions", y = "Mean Firing Rate") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+# Data Integration
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(tidyverse)
+library(gtools)
+setwd("C:/Users/rohan/Downloads/STA141AProject/sessions")
+
+rds_files <- list.files(pattern = "*.rds")
+
+
+session_summaries <- list()
+session_summary_df <- data.frame()
+
+
+for (file in rds_files) {
+  session_data <- readRDS(file)
+  session_name <- sub(".rds", "", file)
+  
+ 
+  avg_feedback <- mean(session_data$feedback_type)
+  
+  
+  avg_neurons_recorded <- mean(sapply(session_data$spks, nrow))
+
+  
+  
+  temp_df <- data.frame(
+    session = session_name,
+    mouse = session_data$mouse_name,
+    avg_feedback = avg_feedback,
+    avg_neurons_recorded = avg_neurons_recorded
+  )
+  
+  session_summary_df <- bind_rows(session_summary_df, temp_df)
+}
+
+
+session_summary_df <- session_summary_df %>%
+  mutate(session = factor(session, levels = mixedsort(session_summary_df$session))) %>%
+  arrange(session)
+session_summary_df <- session_summary_df %>%
+  mutate(scaled_feedback = rescale(avg_feedback, to = range(avg_neurons_recorded)))
+
+# Shared patterns plot
+ggplot(session_summary_df, aes(x = session)) +
+  geom_line(aes(y = avg_neurons_recorded, color = "Average Neurons Recorded"), size = 1.2, group = 1) +
+  geom_point(aes(y = avg_neurons_recorded, color = "Average Neurons Recorded"), size = 3) +
+  geom_line(aes(y = scaled_feedback, color = "Average Feedback(rescaled)"), size = 1.2, group = 1, linetype = "dashed") +
+  geom_point(aes(y = scaled_feedback, color = "Average Feedback (rescaled)"), size = 3) +
+  scale_color_manual(values = c("Average Neurons Recorded" = "blue", "Average Feedback(rescaled)" = "red")) +
+  theme_minimal() +
+  labs(x = "Sessions", y = "Average Values", color = "Metric") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+# Temporal Dynamics Analysis: Line plot - How does the avg firing rate change over the trials?
+# This analysis tracks the neural firing to see if the mice adapt over the trials
+# Along with that this graph allows us to visualize the average firing rate change across the trials
+# Graph for only session 1 and 18 to see potential changes
+library(gtools)
+filtered_data <- combined_data %>%
+  mutate(session_char = as.character(session)) %>%
+  filter(session_char %in% c("session1", "session18")) %>%
+  arrange(session_char, trial)
+
+
+
+
+ggplot(filtered_data, aes(x = trial, y = avg_firing, color = session_char)) +
+  geom_line(alpha = 0.5) +
+  geom_smooth(method = "loess", se = FALSE) +
+  theme_minimal() +
+  labs(x = "Trial Number", y = "Average Firing Rate", color = "Sessions") +
+  scale_color_manual(values = c("blue", "red"))
+
+
+# Graph for all sessions
+combined_data <- combined_data %>%
+  mutate(session = factor(session, levels = mixedsort(unique(session)))) %>%
+  arrange(session, trial)
+
+ggplot(combined_data, aes(x = trial, y = avg_firing, color = session)) +
+  geom_line(alpha = 0.5) +
+  geom_smooth(method = "loess", se = FALSE) +
+  theme_minimal() +
+  labs(x = "Trial Number", y = "Average Firing Rate")
+
+# Neural variability vs stimulus contrast difference graph
+combined_data <- combined_data %>%
+  mutate(contrast_diff = contrast_left - contrast_right)
+
+
+variability_df <- combined_data %>%
+  group_by(contrast_diff) %>%
+  summarise(neural_variability = sd(avg_firing, na.rm = TRUE)) %>%
+  arrange(contrast_diff)
+
+
+ggplot(variability_df, aes(x = contrast_diff, y = neural_variability)) +
+  geom_point(color = "blue", size = 3, alpha = 0.7) +
+  geom_smooth(method = "loess", se = FALSE, color = "red") +  
+  theme_minimal() +
+  labs(x = "Stimulus Contrast Difference (Left - Right)", y = "Neural Variability (SD of Avg Firing Rate)")
+
+
+
+# Predictive Modeling
+library(dplyr)
+library(caret)  
+library(ggplot2)
+library(gtools)  
+
+
+setwd("C:/Users/rohan/Downloads/STA141AProject/sessions")
+rds_files <- list.files(pattern = "*.rds")
+
+
+session_summaries <- list()
+session_summary_df <- data.frame()
+
+
+for (file in rds_files) {
+  session_data <- readRDS(file)
+  session_name <- sub(".rds", "", file)  
+
+  num_trials <- length(session_data$contrast_left)
+  avg_firing_rates <- sapply(session_data$spks, function(spike_matrix) mean(spike_matrix))
+  mean_firing_rate <- mean(avg_firing_rates, na.rm = TRUE)
+
+  session_summary <- data.frame(
+    session = session_name,
+    mouse = session_data$mouse_name,
+    trial = 1:num_trials,
+    contrast_left = session_data$contrast_left,
+    contrast_right = session_data$contrast_right,
+    feedback_type = session_data$feedback_type,
+    avg_firing = avg_firing_rates
+  )
+
+  session_summaries[[session_name]] <- session_summary
+}
+
+
+combined_data <- bind_rows(session_summaries)
+
+
+clean_data <- combined_data %>%
+  filter(!is.na(feedback_type)) %>%
+  mutate(feedback_type = factor(feedback_type, levels = c(-1, 1), labels = c("Incorrect", "Correct")))
+
+
+model_data <- clean_data %>%
+  select(feedback_type, avg_firing, contrast_left, contrast_right)
+
+
+set.seed(20)  
+train_index <- createDataPartition(model_data$feedback_type, p = 0.8, list = FALSE)
+train_data <- model_data[train_index, ]
+validation_data <- model_data[-train_index, ]
+
+
+logit_model <- glm(feedback_type ~ avg_firing + contrast_left + contrast_right,
+                   data = train_data, family = "binomial")
+
+
+validation_data$predicted <- predict(logit_model, newdata = validation_data, type = "response")
+validation_data$predicted_label <- ifelse(validation_data$predicted > 0.5, "Correct", "Incorrect")
+
+
+conf_matrix <- confusionMatrix(factor(validation_data$predicted_label, levels = c("Incorrect", "Correct")),
+                               validation_data$feedback_type)
+print("Overall Confusion Matrix:")
+print(conf_matrix)
+
+
+
+#Logistic Regression: Can neural activity predict feedback type?
+# For Model Performance Analysis
+set.seed(20)
+train_idx <- createDataPartition(combined_data$feedback_type, p = 0.8, list = FALSE)
+train_data <- combined_data[train_idx, ]
+test_data <- combined_data[-train_idx, ]
+train_data$feedback_type <- ifelse(train_data$feedback_type == -1, 0, 1)
+test_data$feedback_type <- ifelse(test_data$feedback_type == -1, 0, 1)
+logit_model <- glm(feedback_type ~ avg_firing + contrast_left + contrast_right,
+                   data = train_data, family = "binomial")
+logit_preds <- predict(logit_model, test_data, type = "response")
+test_data$logit_pred <- ifelse(logit_preds > 0.5, 1, -1)
+logit_acc <- mean(test_data$logit_pred == test_data$feedback_type)
+print(paste("Logistic Regression Accuracy:", logit_acc))
+
+
+# Prediction performance on the test sets
+library(dplyr)
+library(caret)
+library(ggplot2)
+
+setwd("C:/Users/rohan/Downloads/STA141AProject/sessions")
+rds_files <- list.files(pattern = "*.rds")
+
+
+train_data <- data.frame()
+
+
+for (file in rds_files) {
+  session_data <- readRDS(file)
+  session_df <- process_test_data(session_data)
+  train_data <- rbind(train_data, session_df)
+}
+
+
+
+test1_data <- readRDS("C:/Users/rohan/Downloads/STA141AProject/test/test1.rds")
+test2_data <- readRDS("C:/Users/rohan/Downloads/STA141AProject/test/test2.rds")
+
+
+process_test_data <- function(test_data) {
+  num_trials <- length(test_data$contrast_left)
+  avg_firing_rates <- sapply(test_data$spks, function(spike_matrix) mean(spike_matrix))
+  
+  test_df <- data.frame(
+    contrast_left = test_data$contrast_left,
+    contrast_right = test_data$contrast_right,
+    feedback_type = factor(test_data$feedback_type, levels = c(-1, 1), labels = c("Incorrect", "Correct")),
+    avg_firing = avg_firing_rates
+  )
+  
+  return(test_df)
+}
+
+test1_df <- process_test_data(test1_data)
+test2_df <- process_test_data(test2_data)
+
+
+
+train_data$weights <- ifelse(train_data$feedback_type == "Incorrect", 2, 1)  
+
+logit_model <- glm(feedback_type ~ avg_firing + contrast_left + contrast_right,
+                   data = train_data, 
+                   family = "binomial",
+                   weights = train_data$weights)  # Add class weights
+
+
+test1_df$predicted <- predict(logit_model, newdata = test1_df, type = "response")
+test2_df$predicted <- predict(logit_model, newdata = test2_df, type = "response")
+
+
+threshold <- 0.4  
+
+test1_df$predicted_label <- ifelse(test1_df$predicted > threshold, "Correct", "Incorrect")
+test2_df$predicted_label <- ifelse(test2_df$predicted > threshold, "Correct", "Incorrect")
+
+
+conf_matrix_test1 <- confusionMatrix(factor(test1_df$predicted_label, levels = c("Incorrect", "Correct")),
+                                     test1_df$feedback_type)
+conf_matrix_test2 <- confusionMatrix(factor(test2_df$predicted_label, levels = c("Incorrect", "Correct")),
+                                     test2_df$feedback_type)
+
+test1_accuracy <- mean(test1_df$predicted_label == test1_df$feedback_type) * 100
+test2_accuracy <- mean(test2_df$predicted_label == test2_df$feedback_type) * 100
+
+
+print("Confusion Matrix for Test Set 1:")
+print(conf_matrix_test1)
+
+print("Confusion Matrix for Test Set 2:")
+print(conf_matrix_test2)
+
+```
+
+```{r, warning=FALSE}
+# PCA Graphs and values for data integration
+library(tidyverse)
+library(ggplot2)
+library(ggfortify)
+
+
+setwd("C:/Users/rohan/Downloads/STA141AProject/sessions")
+rds_files <- list.files(pattern = "*.rds")
+all_data <- list()
+
+
+for (file in rds_files) {
+  session_data <- readRDS(file)
+  
+  
+  if(is.list(session_data$spks) && length(session_data$spks) > 0) {
+    avg_firing <- sapply(session_data$spks, function(spike_matrix) mean(spike_matrix))
+  } else {
+    warning(paste("Skipping file", file, "due to invalid spike data"))
+    next
+  }
+  
+ 
+  n_trials <- length(session_data$contrast_left)
+  df <- data.frame(
+    trial = 1:n_trials,
+    contrast_left = session_data$contrast_left,
+    contrast_right = session_data$contrast_right,
+    feedback_type = session_data$feedback_type,
+    mouse_name = rep(session_data$mouse_name, n_trials),
+    date_exp = rep(as.character(session_data$date_exp), n_trials)
+  )
+  
+  
+  if(length(avg_firing) == n_trials) {
+    df$avg_firing <- avg_firing
+    all_data[[file]] <- df
+  }
+}
+
+
+if(length(all_data) > 0) {
+  combined_data <- bind_rows(all_data, .id = "session")
+  
+  
+  combined_data$feedback_type <- as.factor(combined_data$feedback_type)
+  combined_data$mouse_name <- as.factor(combined_data$mouse_name)
+  combined_data$session <- as.factor(combined_data$session)
+  
+  
+  pca_data <- combined_data %>%
+    select(contrast_left, contrast_right, avg_firing) %>%
+    drop_na()  
+  
+  
+  if(nrow(pca_data) > 0) {
+    
+    pca_result <- prcomp(pca_data, scale. = TRUE)
+    
+    
+    pca_summary <- summary(pca_result)
+    print(pca_summary)
+    
+   
+    pca_df <- as.data.frame(pca_result$x)
+    pca_df$feedback_type <- combined_data$feedback_type[match(rownames(pca_df), rownames(pca_data))]
+    pca_df$mouse_name <- combined_data$mouse_name[match(rownames(pca_df), rownames(pca_data))]
+    
+    
+    if(!all(is.na(pca_df$feedback_type))) {
+      
+      pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = feedback_type)) +
+        geom_point(alpha = 0.7) +
+        
+        tryCatch(
+          stat_ellipse(level = 0.95, size = 1),
+          error = function(e) geom_point(alpha = 0.7)  
+        ) +
+        labs(
+          x = paste0("PC1 (", round(pca_summary$importance[2,1]*100, 1), "% variance)"),
+          y = paste0("PC2 (", round(pca_summary$importance[2,2]*100, 1), "% variance)"),
+          color = "Feedback Type"
+        ) +
+        theme_minimal() +
+        scale_color_brewer(palette = "Set1", na.value = "gray")
+      
+     
+      print(pca_plot)
+      
+      # PCA plot by mouse
+      pca_plot_by_mouse <- ggplot(pca_df, aes(x = PC1, y = PC2, color = mouse_name)) +
+        geom_point(alpha = 0.7) +
+        labs(
+          x = paste0("PC1 (", round(pca_summary$importance[2,1]*100, 1), "% variance)"),
+          y = paste0("PC2 (", round(pca_summary$importance[2,2]*100, 1), "% variance)"),
+          color = "Mouse Name"
+        ) +
+        theme_minimal() +
+        guides(color = guide_legend(ncol = 2))  
+      
+      
+      print(pca_plot_by_mouse)
+      
+      # Simple PCA Plot
+      tryCatch({
+        biplot <- autoplot(pca_result, 
+                 data = pca_data,
+                 colour = combined_data$feedback_type[match(rownames(pca_data), rownames(combined_data))],
+                 loadings = TRUE, 
+                 loadings.colour = 'blue',
+                 loadings.label = TRUE, 
+                 loadings.label.size = 3) +
+          theme_minimal() +
+          labs(title = "PCA Biplot of Mouse Trial Data")
+        print(biplot)
+      }, error = function(e) {
+        message("Could not create biplot: ", e$message)
+        
+        plot(pca_result$x[,1], pca_result$x[,2], 
+             col = as.numeric(combined_data$feedback_type[match(rownames(pca_data), rownames(combined_data))]),
+             xlab = "PC1", ylab = "PC2")
+      })
+    } else {
+      message("No valid feedback_type data for coloring")
+    }
+  } else {
+    message("Not enough data for PCA after removing NA values")
+  }
+} else {
+  message("No valid data found in the RDS files")
+}
+```
